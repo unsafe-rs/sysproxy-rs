@@ -11,8 +11,10 @@ mod windows;
 pub struct Sysproxy {
     pub enable: bool,
     pub host: String,
-    pub port: u16,
-    pub bypass: String,
+    pub http_port: Option<u16>,
+    pub https_port: Option<u16>,
+    pub socks_port: Option<u16>,
+    pub bypass: Option<String>,
 }
 
 #[derive(thiserror::Error, Debug)]

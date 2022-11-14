@@ -1,6 +1,6 @@
 [package]
 name = "sysproxy"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["zzzgydi"]
 license = "MIT"
@@ -16,4 +16,4 @@ thiserror = "1"
 interfaces = "0.0.8"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-winreg = {version = "0.10", features = ["transactions"]}
+winreg = { version = "0.10", features = ["transactions"] }

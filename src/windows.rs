@@ -17,13 +17,14 @@ impl Sysproxy {
         let host = socket.ip().to_string();
         let port = socket.port();
 
-        let bypass = cur_var.get_value("ProxyOverride").unwrap_or("".into());
+        let bypass = cur_var.get_value("ProxyOverride");
 
         Ok(Sysproxy {
             enable,
             host,
-            port,
+            socks_port: Some(port),
             bypass,
+            ..Default::default()
         })
     }
 
@@ -32,12 +33,16 @@ impl Sysproxy {
         let cur_var = hkcu.open_subkey_with_flags(SUB_KEY, enums::KEY_SET_VALUE)?;
 
         let enable = if self.enable { 1u32 } else { 0u32 };
-        let server = format!("{}:{}", self.host, self.port);
-        let bypass = self.bypass.as_str();
-
         cur_var.set_value("ProxyEnable", &enable)?;
-        cur_var.set_value("ProxyServer", &server)?;
-        cur_var.set_value("ProxyOverride", &bypass)?;
+
+        if let Some(port) = self.socks_port {
+            let server = format!("{}:{}", self.host, port);
+            cur_var.set_value("ProxyServer", &server)?;
+        }
+
+        if let Some(bypass) = self.bypass {
+            cur_var.set_value("ProxyOverride", &bypass)?;
+        }
 
         Ok(())
     }

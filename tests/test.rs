@@ -17,8 +17,9 @@ mod tests {
         let mut sysproxy = Sysproxy {
             enable: true,
             host: "127.0.0.1".into(),
-            port: 9090,
-            bypass: "localhost,127.0.0.1/8".into(),
+            socks_port: Some(9090),
+            bypass: Some("localhost,127.0.0.1/8".into()),
+            ..Default::default()
         };
 
         assert!(sysproxy.set_system_proxy().is_ok());

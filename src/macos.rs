@@ -12,20 +12,10 @@ impl Sysproxy {
         let https = Sysproxy::get_https(service)?;
         let bypass = Sysproxy::get_bypass(service)?;
 
-        socks.bypass = bypass;
+        socks.bypass = Some(bypass);
 
-        if !socks.enable {
-            if http.enable {
-                socks.enable = true;
-                socks.host = http.host;
-                socks.port = http.port;
-            }
-            if https.enable {
-                socks.enable = true;
-                socks.host = https.host;
-                socks.port = https.port;
-            }
-        }
+        socks.http_port = http.http_port;
+        socks.https_port = https.https_port;
 
         Ok(socks)
     }
@@ -61,7 +51,7 @@ impl Sysproxy {
         let bypass = from_utf8(&bypass_output.stdout)
             .or(Err(Error::ParseStr))?
             .split('\n')
-            .filter(|s| s.len() > 0)
+            .filter(|s| !s.is_empty())
             .collect::<Vec<&str>>()
             .join(",");
 
@@ -69,28 +59,39 @@ impl Sysproxy {
     }
 
     pub fn set_http(&self, service: &str) -> Result<()> {
-        set_proxy(self, ProxyType::HTTP, service)
+        if let Some(port) = self.http_port {
+            set_proxy(ProxyType::HTTP, service, &self.host, port, self.enable)?;
+        }
+        Ok(())
     }
 
     pub fn set_https(&self, service: &str) -> Result<()> {
-        set_proxy(self, ProxyType::HTTPS, service)
+        if let Some(port) = self.https_port {
+            set_proxy(ProxyType::HTTPS, service, &self.host, port, self.enable)?;
+        }
+        Ok(())
     }
 
     pub fn set_socks(&self, service: &str) -> Result<()> {
-        set_proxy(self, ProxyType::SOCKS, service)
+        if let Some(port) = self.socks_port {
+            set_proxy(ProxyType::SOCKS, service, &self.host, port, self.enable)?;
+        }
+        Ok(())
     }
 
     pub fn set_bypass(&self, service: &str) -> Result<()> {
-        let domains = self.bypass.split(",").collect::<Vec<_>>();
-        networksetup()
-            .args([["-setproxybypassdomains", service].to_vec(), domains].concat())
-            .status()?;
+        if let Some(bypass) = self.bypass.clone() {
+            let domains = bypass.split(',').collect::<Vec<_>>();
+            networksetup()
+                .args([["-setproxybypassdomains", service].to_vec(), domains].concat())
+                .status()?;
+        }
         Ok(())
     }
 }
 
 #[derive(Debug)]
-enum ProxyType {
+pub enum ProxyType {
     HTTP,
     HTTPS,
     SOCKS,
@@ -110,12 +111,18 @@ fn networksetup() -> Command {
     Command::new("networksetup")
 }
 
-fn set_proxy(proxy: &Sysproxy, proxy_type: ProxyType, service: &str) -> Result<()> {
+pub fn set_proxy(
+    proxy_type: ProxyType,
+    service: &str,
+    host: &str,
+    port: u16,
+    enabled: bool,
+) -> Result<()> {
     let target = format!("-set{}", proxy_type.to_target());
     let target = target.as_str();
 
-    let host = proxy.host.as_str();
-    let port = format!("{}", proxy.port);
+    let host = host;
+    let port = format!("{}", port);
     let port = port.as_str();
 
     networksetup()
@@ -123,7 +130,7 @@ fn set_proxy(proxy: &Sysproxy, proxy_type: ProxyType, service: &str) -> Result<(
         .status()?;
 
     let target_state = format!("-set{}state", proxy_type.to_target());
-    let enable = if proxy.enable { "on" } else { "off" };
+    let enable = if enabled { "on" } else { "off" };
 
     networksetup()
         .args([target_state.as_str(), service, enable])
@@ -132,7 +139,7 @@ fn set_proxy(proxy: &Sysproxy, proxy_type: ProxyType, service: &str) -> Result<(
     Ok(())
 }
 
-fn get_proxy(proxy_type: ProxyType, service: &str) -> Result<Sysproxy> {
+pub fn get_proxy(proxy_type: ProxyType, service: &str) -> Result<Sysproxy> {
     let target = format!("-get{}", proxy_type.to_target());
     let target = target.as_str();
 
@@ -147,12 +154,27 @@ fn get_proxy(proxy_type: ProxyType, service: &str) -> Result<Sysproxy> {
 
     let port = parse(stdout, "Port:");
     let port = port.parse().or(Err(Error::ParseStr))?;
+    let port = if port == 0 { None } else { Some(port) };
 
-    Ok(Sysproxy {
-        enable,
-        host,
-        port,
-        bypass: "".into(),
+    Ok(match proxy_type {
+        ProxyType::HTTP => Sysproxy {
+            enable,
+            host,
+            http_port: port,
+            ..Default::default()
+        },
+        ProxyType::HTTPS => Sysproxy {
+            enable,
+            host,
+            https_port: port,
+            ..Default::default()
+        },
+        ProxyType::SOCKS => Sysproxy {
+            enable,
+            host,
+            socks_port: port,
+            ..Default::default()
+        },
     })
 }
 
@@ -161,7 +183,7 @@ fn parse<'a>(target: &'a str, key: &'a str) -> &'a str {
         Some(idx) => {
             let idx = idx + key.len();
             let value = &target[idx..];
-            let value = match value.find("\n") {
+            let value = match value.find('\n') {
                 Some(end) => &value[..end],
                 None => value,
             };
@@ -171,7 +193,7 @@ fn parse<'a>(target: &'a str, key: &'a str) -> &'a str {
     }
 }
 
-fn default_network_service() -> Result<String> {
+pub fn default_network_service() -> Result<String> {
     let socket = UdpSocket::bind("0.0.0.0:0")?;
     socket.connect("1.1.1.1:80")?;
     let ip = socket.local_addr()?.ip();
@@ -180,7 +202,7 @@ fn default_network_service() -> Result<String> {
     let interfaces = interfaces::Interface::get_all().or(Err(Error::NetworkInterface))?;
     let interface = interfaces
         .into_iter()
-        .find(|i| i.addresses.iter().find(|a| a.addr == Some(addr)).is_some())
+        .find(|i| i.addresses.iter().any(|a| a.addr == Some(addr)))
         .map(|i| i.name.to_owned());
 
     match interface {
@@ -192,12 +214,12 @@ fn default_network_service() -> Result<String> {
     }
 }
 
-fn get_service_by_device(device: String) -> Result<String> {
+pub fn get_service_by_device(device: String) -> Result<String> {
     let output = networksetup().arg("-listallhardwareports").output()?;
     let stdout = from_utf8(&output.stdout).or(Err(Error::ParseStr))?;
 
     let hardware = stdout.split("Ethernet Address:").find_map(|s| {
-        let lines = s.split("\n");
+        let lines = s.split('\n');
         let mut hardware = None;
         let mut device_ = None;
 
